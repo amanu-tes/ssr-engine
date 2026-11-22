@@ -81,7 +81,7 @@ Use **Duplicate this Space**: the copy is private by default, runs on your own h
 nothing with this one. Or run the code on your own machine:
 
 ```bash
-pip install -r requirements.txt "gradio==6.32.0"
+pip install -r requirements.txt "gradio==6.32.0" spaces
 python app.py                      # tests: python -m unittest discover -s tests
 ```
 

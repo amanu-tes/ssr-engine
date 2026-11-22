@@ -300,13 +300,14 @@ class EncoderTests(unittest.TestCase):
             def is_floating_point(self):
                 return True
 
-        def library(loaded, refuse_text_only=False):
+        def library(loaded, refuse_text_only=False, gpu=False):
             def load(model_id, **options):
                 calls.append((model_id, options))
                 if refuse_text_only and "config_kwargs" in options:
                     raise KeyError("audio_config")
                 return types.SimpleNamespace(parameters=lambda: [Parameter(loaded)])
-            return {"torch": types.SimpleNamespace(float32="float32"), "sentence_transformers": types.SimpleNamespace(SentenceTransformer=load)}
+            return {"torch": types.SimpleNamespace(float32="float32", cuda=types.SimpleNamespace(is_available=lambda: gpu)),
+                    "sentence_transformers": types.SimpleNamespace(SentenceTransformer=load)}
 
         with mock.patch.dict(sys.modules, library("float32")):
             encoders.SentenceEncoder("google/embeddinggemma-2")
@@ -319,9 +320,28 @@ class EncoderTests(unittest.TestCase):
         self.assertNotIn("config_kwargs", calls[1][1])
         with mock.patch.dict(sys.modules, library("bfloat16")), self.assertRaises(ValueError):
             encoders.SentenceEncoder("google/embeddinggemma-2")              # the model's own config names bfloat16; that must never score
+        calls.clear()
+        with mock.patch.dict(sys.modules, library("float32", gpu=True)), mock.patch.object(encoders, "_MODEL", None):
+            on_gpu = encoders.SentenceEncoder("google/embeddinggemma-2")     # a Space with a GPU: the model is placed there, still in float32
+            self.assertEqual((calls[0][1]["device"], calls[0][1]["model_kwargs"], on_gpu.device), ("cuda", {"dtype": "float32"}, "cuda"))
+            self.assertIs(encoders._MODEL, on_gpu.model)                     # the function the platform runs on the GPU finds the model by name
+
+    def test_the_loaded_model_is_run_through_the_one_function_the_platform_can_move_to_a_gpu(self):
+        import types
+        seen = []
+
+        def run(texts, **options):
+            seen.append((list(texts), options))
+            return [[1.0, 0.0] for _ in texts]
+        encoder = encoders.SentenceEncoder("google/embeddinggemma-2", factory=lambda: None)
+        encoder._own = False                                                 # as after a real load
+        with mock.patch.object(encoders, "_MODEL", types.SimpleNamespace(encode=run)):
+            self.assertEqual(encoder.encode(["a reply", "a delete"]), [[1.0, 0.0], [1.0, 0.0]])
+        self.assertEqual(seen, [([encoders.SIMILARITY_PREFIX + "a reply", encoders.SIMILARITY_PREFIX + "a delete"], {"normalize_embeddings": True, "show_progress_bar": False})])
+        self.assertEqual([encoders._seconds(["x"] * n) for n in (1, 64, 200, 5000)], [15, 19, 27, 60])      # a short hold of the GPU, capped at a minute
 
     def test_a_caller_can_ask_what_is_running_before_sending_anything(self):
-        self.assertEqual(service.about(HASH), {"version": service.VERSION, "encoder": "hash", "dtype": "float32", "meaningful": False,
+        self.assertEqual(service.about(HASH), {"version": service.VERSION, "encoder": "hash", "dtype": "float32", "device": "cpu", "meaningful": False,
                                                "prefix": "", "mappings": ["paper", "power"], "default_anchor_sets": 3,
                                                "limits": {"texts": 200, "text_chars": 2000, "anchor_sets": 6, "anchor_chars": 400, "labelled": 400}})
         real = encoders.SentenceEncoder("google/embeddinggemma-2", "float32", factory=lambda: object())

@@ -1,5 +1,6 @@
-# The Space installs Gradio itself from sdk_version in README.md.
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.8.0+cpu
+# The Space installs Gradio itself from sdk_version in README.md, and the `spaces` package with it.
+# Plain torch, not the CPU-only build: a ZeroGPU Space accepts only the versions on its own list, and
+# this wheel also runs on a CPU Space.
+torch==2.8.0
 transformers==5.20.1
 sentence-transformers==6.1.0

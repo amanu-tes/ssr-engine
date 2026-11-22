@@ -18,5 +18,5 @@ jobs:
         with:
           python-version: "3.12"
       # The tests use the stand-in encoder, so the model's own packages are not needed here.
-      - run: pip install "gradio==6.32.0"
+      - run: pip install "gradio==6.32.0" spaces      # `spaces` comes with every Space; here it is installed by hand
       - run: python -m unittest discover -s tests -v

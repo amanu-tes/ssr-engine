@@ -117,6 +117,7 @@ def about(encoder=None) -> dict:
     """What is running. A caller can check this before sending anything."""
     encoder = encoder or encoders.get()
     return {"version": VERSION, "encoder": encoder.name, "dtype": encoder.dtype, "prefix": getattr(encoder, "prefix", ""),
+            "device": getattr(encoder, "device", "cpu"),
             "meaningful": bool(getattr(encoder, "meaningful", True)), "mappings": list(mapping.METHODS), "default_anchor_sets": len(default_anchors.DEFAULT),
             "limits": {k: v for k, v in LIMITS.items() if k != "decimals"}}
 

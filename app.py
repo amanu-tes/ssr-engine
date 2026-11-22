@@ -16,6 +16,8 @@ README.md says what that does and does not protect against.
 """
 from __future__ import annotations
 
+import spaces  # noqa: F401, I001 - first, before anything imports torch: on a ZeroGPU Space this is what makes the GPU usable
+
 import functools
 import json
 import logging
