@@ -2,5 +2,7 @@
 # Plain torch, not the CPU-only build: a ZeroGPU Space accepts only the versions on its own list, and
 # this wheel also runs on a CPU Space.
 torch==2.8.0
+# The model's processor imports torchvision when it loads, though only text is ever encoded. 0.23.0 is the build for torch 2.8.0.
+torchvision==0.23.0
 transformers==5.20.1
 sentence-transformers==6.1.0
