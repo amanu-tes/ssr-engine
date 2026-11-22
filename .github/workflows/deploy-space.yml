@@ -1,0 +1,61 @@
+# Publishes this repository's engine files to the Space etesfaye/ssr-engine after a push to main.
+#
+# Needs the repository secret HF_SPACE_TOKEN: a fine-grained Hugging Face token with write access
+# to that one Space only. Starting this by hand on any other branch runs the tests and publishes nothing.
+name: Deploy to the Space
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-space
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "gradio==6.32.0"
+      - run: python -m unittest discover -s tests
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Copy the engine into the Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_SPACE_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::HF_SPACE_TOKEN is not set in the repository secrets."
+            exit 1
+          fi
+          # The token is handed to git by a helper that reads it from the environment, so it is
+          # never part of a URL, a remote, or anything git writes to disk.
+          git config --global credential.helper '!f() { echo "username=etesfaye"; echo "password=${HF_TOKEN}"; }; f'
+          git clone --depth 1 https://huggingface.co/spaces/etesfaye/ssr-engine "$RUNNER_TEMP/space"
+          rsync -a --delete --exclude ".git" --exclude ".gitattributes" --exclude ".github" --exclude "tests" --exclude ".gitignore" --exclude "__pycache__" ./ "$RUNNER_TEMP/space/"
+          cd "$RUNNER_TEMP/space"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The Space already has these files."
+            exit 0
+          fi
+          git -c user.name="ssr-engine deploy" -c user.email="deploy@users.noreply.huggingface.co" commit -q -m "Update the engine"
+          # No force push: if the Space has commits this clone did not see, this fails instead of overwriting them.
+          git push origin HEAD:main
