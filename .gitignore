@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .venv/
 .ruff_cache/
+# Written into a private deployment's Space to enable its text model; never part of this repository.
+engine_config.json
