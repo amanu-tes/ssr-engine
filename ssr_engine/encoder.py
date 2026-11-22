@@ -1,4 +1,4 @@
-"""Text to vectors: a sentence-embedding model on the CPU, or a deterministic stand-in.
+"""Text to vectors: a sentence-embedding model on the Space's hardware, or a deterministic stand-in.
 
 The model is chosen by the Space's variables, never by a request. With none set, the Space runs
 google/embeddinggemma-2; there is no fallback to the stand-in, so a model that fails to load stops
@@ -14,6 +14,11 @@ exceed that range and the vectors come back wrong without an error. Anything but
 before a model is touched, and what comes back is checked for values that are not finite.
 
 Nothing here keeps a text or a vector after the call that asked for it returns.
+
+Hardware. The same code runs on a CPU Space and on a ZeroGPU Space. On ZeroGPU the model is loaded
+for the GPU at start-up and the one function that runs it, `_encode`, is handed to the platform with
+`@spaces.GPU`: it runs in a separate process that has the GPU for the length of one call, so plain
+lists go in and plain lists come back. Off ZeroGPU the `spaces` package does nothing.
 """
 from __future__ import annotations
 
@@ -22,6 +27,8 @@ import math
 import os
 import re
 import threading
+
+import spaces        # before torch is imported anywhere: on ZeroGPU this is what lets a model be placed on the GPU at start-up
 
 DEFAULT_MODEL = "google/embeddinggemma-2"
 SIMILARITY_PREFIX = "task: sentence similarity | query: "
@@ -54,6 +61,7 @@ class HashEncoder:
     interface without downloading a model."""
 
     name = "hash"
+    device = "cpu"
     dtype = "float32"
     prefix = ""
     meaningful = False
@@ -71,8 +79,22 @@ class HashEncoder:
         return vectors
 
 
+_MODEL = None        # the loaded model, as a module global: the process that runs _encode on a GPU reaches it by name
+
+
+def _seconds(texts) -> int:
+    """How long one call may hold the GPU. Small on purpose: the platform checks the request against the caller's remaining quota."""
+    return min(60, 15 + len(texts) // 16)
+
+
+@spaces.GPU(duration=_seconds)
+def _encode(texts: list[str]) -> list[list[float]]:
+    vectors = _MODEL.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+    return vectors.tolist() if hasattr(vectors, "tolist") else [[float(x) for x in vector] for vector in vectors]
+
+
 class SentenceEncoder:
-    """A sentence-transformers model on the CPU in float32. Its libraries are imported only here."""
+    """A sentence-transformers model in float32, on the GPU where the Space has one. Its libraries are imported only here."""
 
     meaningful = True
 
@@ -81,6 +103,7 @@ class SentenceEncoder:
         self.name = model_id
         self.prefix = (SIMILARITY_PREFIX if "embeddinggemma" in model_id.lower() else "") if prefix is None else prefix
         self._lock = threading.Lock()            # one request in the model at a time: no batch ever mixes two callers' texts
+        self.device, self._own = "cpu", factory is not None
         if factory is not None:                  # tests inject a stand-in for the library's model
             self.model = factory()
             return
@@ -89,19 +112,27 @@ class SentenceEncoder:
         # float32 is asked for by name. Left to itself the library loads the precision the model's own
         # config names, which for EmbeddingGemma 2 is bfloat16.
         precision = {"dtype": torch.float32}
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"     # true on a ZeroGPU Space once `spaces` is imported
         try:                                     # text encoder only, where the model and library allow it
-            self.model = SentenceTransformer(model_id, device="cpu", model_kwargs=precision, config_kwargs={"vision_config": None, "audio_config": None})
+            self.model = SentenceTransformer(model_id, device=self.device, model_kwargs=precision, config_kwargs={"vision_config": None, "audio_config": None})
         except Exception:  # noqa: BLE001 - whatever a model makes of those two settings, the plain load is tried once
-            self.model = SentenceTransformer(model_id, device="cpu", model_kwargs=precision)
+            self.model = SentenceTransformer(model_id, device=self.device, model_kwargs=precision)
         # What matters is what was actually loaded, so that is checked: anything else stops the Space instead of scoring.
         wrong = sorted({str(p.dtype) for p in self.model.parameters() if p.is_floating_point() and p.dtype != torch.float32})
         if wrong:
             raise ValueError("The encoder loaded with weights that are not float32.")
+        global _MODEL
+        _MODEL = self.model
 
     def encode(self, texts) -> list[list[float]]:
+        framed = [self.prefix + str(t) for t in texts]
         with self._lock:
-            vectors = self.model.encode([self.prefix + str(t) for t in texts], normalize_embeddings=True, show_progress_bar=False)
-        return finite(vectors.tolist() if hasattr(vectors, "tolist") else vectors)
+            if self._own:                        # a test's stand-in model, run here
+                vectors = self.model.encode(framed, normalize_embeddings=True, show_progress_bar=False)
+                vectors = vectors.tolist() if hasattr(vectors, "tolist") else vectors
+            else:
+                vectors = _encode(framed)
+        return finite(vectors)
 
 
 _ENCODER = None
