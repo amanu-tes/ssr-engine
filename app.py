@@ -1,5 +1,8 @@
 """SSR Engine: a stateless scorer for semantic similarity rating.
 
+The public Space scores and nothing else. A deployment can also enable a text model (ssr_engine/generator.py
+says how); it is then reachable as one more API operation, under the same rules, and has no tab on the page.
+
 What this file is careful about, because the Space is public and its callers do not know each other:
 
   * no component that takes or returns a file, no session state, no cached examples;
@@ -31,7 +34,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import gradio as gr  # noqa: E402
 
-from ssr_engine import LIMITS, VERSION, EngineError, anchors, encoder, service  # noqa: E402
+from ssr_engine import LIMITS, VERSION, EngineError, anchors, encoder, generator, service  # noqa: E402
 
 log = logging.getLogger("ssr_engine")
 
@@ -71,10 +74,19 @@ scale. Each reaction is embedded and compared with anchor statements written for
 (Maier et al., arXiv:2510.08338). Two mappings are offered so they can be compared: **paper**, as the
 authors' reference code computes it, and **power**, a simpler mean-cosine variant.
 
+### Scoring, and writing only where it is switched on
+
+This engine scores text; as published it writes none. A deployment of this code can enable a text
+model, which is then reachable from code only (`/generate`; there is no tab for it). When one is
+running, the line at the top of this page names it and `/engine` reports it as `generator`; `null`
+there means this instance only scores.
+
 ### What happens to what you send
 
-- Reactions and anchors are held in memory for the one request and then dropped.
+- Reactions and anchors are held in memory for the one request and then dropped. So are prompts,
+  and the texts written for them, where a text model is enabled.
 - The app writes nothing you send to disk, a database or a log, and no result repeats your text.
+  Texts a model wrote for you are returned to you and kept nowhere. Log lines carry counts and durations.
 - Nothing is cached per caller. The only cached vectors are those of the built-in anchors.
 - Run history, analytics and the monitoring page are off. No part of the page takes a file.
 
@@ -90,6 +102,10 @@ authors' reference code computes it, and **power**, a simpler mean-cosine varian
 Up to {LIMITS['texts']} reactions per request, {LIMITS['text_chars']} characters each; up to
 {LIMITS['anchor_sets']} anchor sets of five statements; up to {LIMITS['labelled']} labelled reactions
 for calibration. The encoder runs in float32 on a shared CPU, one request at a time.
+
+Where a text model is enabled: up to {LIMITS['prompts']} prompts per request, each a system part of up to
+{LIMITS['system_chars']} characters and a user part of up to {LIMITS['user_chars']}; {LIMITS['min_new_tokens']} to
+{LIMITS['max_new_tokens']} new tokens per text.
 
 Engine {VERSION}.
 """
@@ -123,18 +139,31 @@ def calibrate(request: dict) -> dict:
     return _run("calibrate", service.calibrate, request)
 
 
+def generate(request: dict) -> dict:
+    """Write one text per prompt, where this deployment has enabled a text model (`engine` says: "generator").
+    Request: {"prompts": [{"system": ..., "user": ...}, ...], "max_new_tokens": 400 (optional),
+    "temperature": 0.7 (optional; 0 is greedy), "seed": null (optional)}. Returns {"model": ..., "texts": [...],
+    "usage": {"prompt_tokens": ..., "completion_tokens": ...}}: texts in the order of the prompts, each the model's
+    final answer only, and "" where it gave none. Prompts are never returned."""
+    return _run("generate", service.generate, request)
+
+
 def engine() -> dict:
-    """What is running: the encoder, its precision, the mappings and the request limits. Takes nothing;
-    call it before sending text if you need to be sure which encoder will read it."""
+    """What is running: the encoder, its precision, the mappings, the text model if one is enabled ("generator",
+    otherwise null) and the request limits. Takes nothing; call it before sending text if you need to be sure what will read it."""
     return _run("engine", lambda _: service.about(), None)
 
 
 def status() -> str:
     running = service.about()
     if not running["meaningful"]:
-        return ("> **Stand-in encoder.** This instance is set to the offline stand-in, which matches wording, not meaning. "
+        line = ("> **Stand-in encoder.** This instance is set to the offline stand-in, which matches wording, not meaning. "
                 "Its scores are for trying the interface only.")
-    return f"Encoder: `{running['encoder']}`, {running['dtype']}, on this Space's own hardware."
+    else:
+        line = f"Encoder: `{running['encoder']}`, {running['dtype']}, on this Space's own hardware."
+    if running["generator"]:
+        line += f" Text model, from code only: `{running['generator']}`."
+    return line
 
 
 def _custom_anchors(text: str):
@@ -232,6 +261,7 @@ with gr.Blocks(title="SSR Engine", analytics_enabled=False, delete_cache=(1800, 
     gr.api(engine, api_name="engine")
     gr.api(score, api_name="score")
     gr.api(calibrate, api_name="calibrate")
+    gr.api(generate, api_name="generate")       # answers "no text model enabled" unless the deployment has one; deliberately not on the page
 
 demo.queue(max_size=24, default_concurrency_limit=1, api_open=False)
 
@@ -241,4 +271,5 @@ LAUNCH = dict(show_error=True, run_history=False, enable_monitoring=False, mcp_s
 if __name__ == "__main__":
     configure_logging()
     encoder.get()            # load the weights before the first caller arrives
+    generator.load()         # and the text model's, if this deployment enables one: here, not at the first request. It never stops the Space
     demo.launch(**LAUNCH)

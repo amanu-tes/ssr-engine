@@ -48,7 +48,7 @@ LABELLED = [
 
 def load_app():
     """The app, loaded from its file with the stand-in encoder selected."""
-    with mock.patch.dict(os.environ, {"SSR_ENGINE_ENCODER": "hash"}):
+    with mock.patch.dict(os.environ, {"SSR_ENGINE_ENCODER": "hash", "SSR_GENERATOR_MODEL": ""}):
         spec = importlib.util.spec_from_file_location("ssr_engine_space_app", SPACE / "app.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -343,7 +343,10 @@ class EncoderTests(unittest.TestCase):
     def test_a_caller_can_ask_what_is_running_before_sending_anything(self):
         self.assertEqual(service.about(HASH), {"version": service.VERSION, "encoder": "hash", "dtype": "float32", "device": "cpu", "meaningful": False,
                                                "prefix": "", "mappings": ["paper", "power"], "default_anchor_sets": 3,
-                                               "limits": {"texts": 200, "text_chars": 2000, "anchor_sets": 6, "anchor_chars": 400, "labelled": 400}})
+                                               "generator": None,                 # no text model unless the deployment enables one
+                                               "limits": {"texts": 200, "text_chars": 2000, "anchor_sets": 6, "anchor_chars": 400, "labelled": 400,
+                                                          "prompts": 32, "system_chars": 4000, "user_chars": 8000,
+                                                          "min_new_tokens": 16, "max_new_tokens": 800, "max_temperature": 1.5}})
         real = encoders.SentenceEncoder("google/embeddinggemma-2", "float32", factory=lambda: object())
         self.assertEqual((service.about(real)["encoder"], service.about(real)["meaningful"]), ("google/embeddinggemma-2", True))
         self.assertEqual(service.about(real)["prefix"], encoders.SIMILARITY_PREFIX)        # a caller can tell how inputs were framed
@@ -403,7 +406,8 @@ class AppTests(unittest.TestCase):
 
     def test_only_the_two_operations_are_reachable_as_an_api(self):
         info = self.app.demo.get_api_info()
-        self.assertEqual(sorted(info["named_endpoints"]), ["/calibrate", "/engine", "/score"])
+        # and /generate, which refuses unless the deployment has enabled a text model (tests/test_generator.py)
+        self.assertEqual(sorted(info["named_endpoints"]), ["/calibrate", "/engine", "/generate", "/score"])
         self.assertEqual(info["unnamed_endpoints"], {})
 
     def test_the_page_says_which_encoder_is_running_and_warns_when_it_is_the_stand_in(self):
@@ -501,7 +505,7 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual((service.LIMITS["texts"], service.LIMITS["text_chars"], service.LIMITS["anchor_sets"], service.LIMITS["labelled"]), (200, 2000, 6, 400))
         for promise in ("encrypted", "anonymous", "guarantee", "compliant", "certified", "secure", "takes no files"):
             self.assertNotIn(promise, card.lower())
-        for variable in re.findall(r"SSR_ENGINE_[A-Z_]+", "".join(p.read_text(encoding="utf-8") for p in ROOT.glob("**/*.py") if "tests" not in p.parts)):
+        for variable in re.findall(r"SSR_(?:ENGINE|GENERATOR)_[A-Z_]+", "".join(p.read_text(encoding="utf-8") for p in ROOT.glob("**/*.py") if "tests" not in p.parts)):
             self.assertIn(variable, card)                                    # no setting changes behaviour without being documented
 
     def test_only_a_push_to_main_can_publish_and_the_token_stays_out_of_urls(self):

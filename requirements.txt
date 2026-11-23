@@ -6,3 +6,5 @@ torch==2.8.0
 torchvision==0.23.0
 transformers==5.20.1
 sentence-transformers==6.1.0
+# The optional text model (README: "A text model") needs nothing more than the above. `kernels` and `accelerate`, which its model card
+# and guide install to run its MXFP4 weights as published, are left out on purpose: the engine de-quantises those weights as they load.

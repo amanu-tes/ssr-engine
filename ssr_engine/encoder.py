@@ -80,11 +80,12 @@ class HashEncoder:
 
 
 _MODEL = None        # the loaded model, as a module global: the process that runs _encode on a GPU reaches it by name
+WARM_UP = 0          # seconds added when the Space also holds a text model: a new GPU process loads every weight on the Space before it runs anything
 
 
 def _seconds(texts) -> int:
     """How long one call may hold the GPU. Small on purpose: the platform checks the request against the caller's remaining quota."""
-    return min(60, 15 + len(texts) // 16)
+    return min(60, 15 + len(texts) // 16) + WARM_UP
 
 
 @spaces.GPU(duration=_seconds)
